@@ -152,9 +152,12 @@ export class BalanceMonitor {
    * Format USDC amount (in micros) as "$X.XX".
    */
   formatUSDC(amountMicros: bigint): string {
-    // USDC has 6 decimals
-    const dollars = Number(amountMicros) / 1_000_000;
-    return `$${dollars.toFixed(2)}`;
+    // Use BigInt arithmetic to avoid Number precision loss for large balances
+    const whole = amountMicros / 1_000_000n;
+    const frac = amountMicros % 1_000_000n;
+    // Pad fractional part to 2 decimal places (cents)
+    const cents = (frac / 10_000n).toString().padStart(2, "0");
+    return `$${whole}.${cents}`;
   }
 
   /**

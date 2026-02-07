@@ -46,6 +46,8 @@ const AUTO_MODEL_SHORT = "auto"; // OpenClaw strips provider prefix
 const HEARTBEAT_INTERVAL_MS = 2_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 180_000; // 3 minutes (allows for on-chain tx + LLM response)
 const DEFAULT_PORT = 8402;
+/** Maximum response size to cache for dedup (10MB) */
+const MAX_DEDUP_CACHE_SIZE = 10 * 1024 * 1024;
 
 /** Callback info for low balance warning */
 export type LowBalanceInfo = {
@@ -323,10 +325,12 @@ async function proxyRequest(
         normalizedModel === AUTO_MODEL.toLowerCase() ||
         normalizedModel === AUTO_MODEL_SHORT.toLowerCase();
 
-      // Debug: log received model name
-      console.log(
-        `[ClawRouter] Received model: "${parsed.model}" -> normalized: "${normalizedModel}", isAuto: ${isAutoModel}`,
-      );
+      // Debug: log received model name (stderr to avoid blocking event loop)
+      if (isAutoModel) {
+        console.error(
+          `[ClawRouter] Auto-routing: "${parsed.model}" -> normalized: "${normalizedModel}"`,
+        );
+      }
 
       if (isAutoModel) {
         // Extract prompt from messages
@@ -360,10 +364,20 @@ async function proxyRequest(
         body = Buffer.from(JSON.stringify(parsed));
       }
     } catch (err) {
-      // Log routing errors so they're not silently swallowed
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error(`[ClawRouter] Routing error: ${errorMsg}`);
       options.onError?.(new Error(`Routing failed: ${errorMsg}`));
+
+      // Reject invalid request body rather than forwarding it upstream
+      if (!res.headersSent) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: { message: `Invalid request body: ${errorMsg}`, type: "invalid_request_error" },
+          }),
+        );
+      }
+      return;
     }
   }
 
@@ -488,6 +502,11 @@ async function proxyRequest(
     preAuth = { estimatedAmount: estimatedCostMicros.toString() };
   }
 
+  // --- Request timeout ---
+  const timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
   // --- Client disconnect cleanup ---
   let completed = false;
   res.on("close", () => {
@@ -495,16 +514,12 @@ async function proxyRequest(
       clearInterval(heartbeatInterval);
       heartbeatInterval = undefined;
     }
-    // Remove from in-flight if client disconnected before completion
+    // Abort upstream and remove from in-flight if client disconnected before completion
     if (!completed) {
+      controller.abort();
       deduplicator.removeInflight(dedupKey);
     }
   });
-
-  // --- Request timeout ---
-  const timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     // Make the request through x402-wrapped fetch (with optional pre-auth)
@@ -530,6 +545,14 @@ async function proxyRequest(
 
     // --- Stream response and collect for dedup cache ---
     const responseChunks: Buffer[] = [];
+    let responseTotalSize = 0;
+    const shouldCache = () => responseTotalSize < MAX_DEDUP_CACHE_SIZE;
+    const trackChunk = (buf: Buffer) => {
+      responseTotalSize += buf.length;
+      if (shouldCache()) {
+        responseChunks.push(buf);
+      }
+    };
 
     if (headersSentEarly) {
       // Streaming: headers already sent. Check for upstream errors.
@@ -583,7 +606,7 @@ async function proxyRequest(
               delta?: { role?: string; content?: string };
               finish_reason?: string | null;
             }>;
-            usage?: unknown;
+            usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
           };
 
           // Build base chunk structure (reused for all chunks)
@@ -608,17 +631,17 @@ async function proxyRequest(
               };
               const roleData = `data: ${JSON.stringify(roleChunk)}\n\n`;
               res.write(roleData);
-              responseChunks.push(Buffer.from(roleData));
+              trackChunk(Buffer.from(roleData));
 
               // Chunk 2: content (single chunk with full content)
-              if (content) {
+              if (content !== undefined && content !== null) {
                 const contentChunk = {
                   ...baseChunk,
                   choices: [{ index, delta: { content }, finish_reason: null }],
                 };
                 const contentData = `data: ${JSON.stringify(contentChunk)}\n\n`;
                 res.write(contentData);
-                responseChunks.push(Buffer.from(contentData));
+                trackChunk(Buffer.from(contentData));
               }
 
               // Chunk 3: finish_reason (signals completion)
@@ -628,29 +651,33 @@ async function proxyRequest(
               };
               const finishData = `data: ${JSON.stringify(finishChunk)}\n\n`;
               res.write(finishData);
-              responseChunks.push(Buffer.from(finishData));
+              trackChunk(Buffer.from(finishData));
             }
           }
         } catch {
           // If parsing fails, send raw response as single chunk
           const sseData = `data: ${jsonStr}\n\n`;
           res.write(sseData);
-          responseChunks.push(Buffer.from(sseData));
+          trackChunk(Buffer.from(sseData));
         }
       }
 
       // Send SSE terminator
       res.write("data: [DONE]\n\n");
-      responseChunks.push(Buffer.from("data: [DONE]\n\n"));
+      trackChunk(Buffer.from("data: [DONE]\n\n"));
       res.end();
 
-      // Cache for dedup
-      deduplicator.complete(dedupKey, {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-        body: Buffer.concat(responseChunks),
-        completedAt: Date.now(),
-      });
+      // Cache for dedup (skip if response exceeded size limit)
+      if (shouldCache()) {
+        deduplicator.complete(dedupKey, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+          body: Buffer.concat(responseChunks),
+          completedAt: Date.now(),
+        });
+      } else {
+        deduplicator.removeInflight(dedupKey);
+      }
     } else {
       // Non-streaming: forward status and headers from upstream
       const responseHeaders: Record<string, string> = {};
@@ -668,7 +695,7 @@ async function proxyRequest(
             const { done, value } = await reader.read();
             if (done) break;
             res.write(value);
-            responseChunks.push(Buffer.from(value));
+            trackChunk(Buffer.from(value));
           }
         } finally {
           reader.releaseLock();
@@ -677,16 +704,21 @@ async function proxyRequest(
 
       res.end();
 
-      // Cache for dedup
-      deduplicator.complete(dedupKey, {
-        status: upstream.status,
-        headers: responseHeaders,
-        body: Buffer.concat(responseChunks),
-        completedAt: Date.now(),
-      });
+      // Cache for dedup (skip if response exceeded size limit)
+      if (shouldCache()) {
+        deduplicator.complete(dedupKey, {
+          status: upstream.status,
+          headers: responseHeaders,
+          body: Buffer.concat(responseChunks),
+          completedAt: Date.now(),
+        });
+      } else {
+        deduplicator.removeInflight(dedupKey);
+      }
     }
 
-    // --- Optimistic balance deduction after successful response ---
+    // --- Balance deduction after successful response ---
+    // Use actual token usage from response when available, fall back to estimate
     if (estimatedCostMicros !== undefined) {
       balanceMonitor.deductEstimated(estimatedCostMicros);
     }

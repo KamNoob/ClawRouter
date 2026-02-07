@@ -77,9 +77,16 @@ export async function fetchWithRetry(
       let delay: number;
 
       if (retryAfter) {
-        // Retry-After can be seconds or HTTP-date
+        // Retry-After can be seconds or HTTP-date (e.g., "Wed, 21 Oct 2026 07:28:00 GMT")
         const seconds = parseInt(retryAfter, 10);
-        delay = isNaN(seconds) ? cfg.baseDelayMs * Math.pow(2, attempt) : seconds * 1000;
+        if (!isNaN(seconds)) {
+          delay = seconds * 1000;
+        } else {
+          const dateMs = Date.parse(retryAfter);
+          delay = !isNaN(dateMs)
+            ? Math.max(0, dateMs - Date.now())
+            : cfg.baseDelayMs * Math.pow(2, attempt);
+        }
       } else {
         delay = cfg.baseDelayMs * Math.pow(2, attempt);
       }

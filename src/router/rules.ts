@@ -36,7 +36,32 @@ function scoreKeywordMatch(
   thresholds: { low: number; high: number },
   scores: { none: number; low: number; high: number },
 ): DimensionScore {
-  const matches = keywords.filter((kw) => text.includes(kw.toLowerCase()));
+  // Keywords are expected to be lowercase in config (text is already lowercased by caller)
+  const matches = keywords.filter((kw) => text.includes(kw));
+  if (matches.length >= thresholds.high) {
+    return {
+      name,
+      score: scores.high,
+      signal: `${signalLabel} (${matches.slice(0, 3).join(", ")})`,
+    };
+  }
+  if (matches.length >= thresholds.low) {
+    return {
+      name,
+      score: scores.low,
+      signal: `${signalLabel} (${matches.slice(0, 3).join(", ")})`,
+    };
+  }
+  return { name, score: scores.none, signal: null };
+}
+
+function scoreFromCount(
+  matches: string[],
+  name: string,
+  signalLabel: string,
+  thresholds: { low: number; high: number },
+  scores: { none: number; low: number; high: number },
+): DimensionScore {
   if (matches.length >= thresholds.high) {
     return {
       name,
@@ -55,7 +80,7 @@ function scoreKeywordMatch(
 }
 
 function scoreMultiStep(text: string): DimensionScore {
-  const patterns = [/first.*then/i, /step \d/i, /\d\.\s/];
+  const patterns = [/first.*then/i, /step \d/i, /\d\.\s/, /^[a-z]\)\s/im, /^[-*]\s/m];
   const hits = patterns.filter((p) => p.test(text));
   if (hits.length > 0) {
     return { name: "multiStepPatterns", score: 0.5, signal: "multi-step" };
@@ -83,6 +108,9 @@ export function classifyByRules(
   // User prompt only — used for reasoning markers (system prompt shouldn't influence complexity)
   const userText = prompt.toLowerCase();
 
+  // Pre-compute reasoning keyword matches (used for both dimension scoring and override)
+  const reasoningMatches = config.reasoningKeywords.filter((kw) => userText.includes(kw));
+
   // Score all 14 dimensions
   const dimensions: DimensionScore[] = [
     // Original 8 dimensions
@@ -96,9 +124,9 @@ export function classifyByRules(
       { none: 0, low: 0.5, high: 1.0 },
     ),
     // Reasoning markers use USER prompt only — system prompt "step by step" shouldn't trigger reasoning
-    scoreKeywordMatch(
-      userText,
-      config.reasoningKeywords,
+    // Uses pre-computed reasoningMatches count to avoid duplicate keyword scan
+    scoreFromCount(
+      reasoningMatches,
       "reasoningMarkers",
       "reasoning",
       { low: 1, high: 2 },
@@ -189,17 +217,14 @@ export function classifyByRules(
   const weights = config.dimensionWeights;
   let weightedScore = 0;
   for (const d of dimensions) {
-    const w = weights[d.name] ?? 0;
-    weightedScore += d.score * w;
+    if (!(d.name in weights)) {
+      throw new Error(`Missing dimension weight for "${d.name}" in config.dimensionWeights`);
+    }
+    weightedScore += d.score * weights[d.name];
   }
 
-  // Count reasoning markers for override — only check USER prompt, not system prompt
-  // This prevents system prompts with "step by step" from triggering REASONING for simple queries
-  const reasoningMatches = config.reasoningKeywords.filter((kw) =>
-    userText.includes(kw.toLowerCase()),
-  );
-
   // Direct reasoning override: 2+ reasoning markers = high confidence REASONING
+  // Uses pre-computed reasoningMatches from above to avoid duplicate keyword scan
   if (reasoningMatches.length >= 2) {
     const confidence = calibrateConfidence(
       Math.max(weightedScore, 0.3), // ensure positive for confidence calc

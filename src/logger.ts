@@ -21,6 +21,7 @@ export type UsageEntry = {
 
 const LOG_DIR = join(homedir(), ".openclaw", "blockrun", "logs");
 let dirReady = false;
+let logErrorReported = false;
 
 async function ensureDir(): Promise<void> {
   if (dirReady) return;
@@ -37,7 +38,13 @@ export async function logUsage(entry: UsageEntry): Promise<void> {
     const date = entry.timestamp.slice(0, 10); // YYYY-MM-DD
     const file = join(LOG_DIR, `usage-${date}.jsonl`);
     await appendFile(file, JSON.stringify(entry) + "\n");
-  } catch {
-    // Never break the request flow
+  } catch (err) {
+    // Never break the request flow — but report the first error to stderr
+    if (!logErrorReported) {
+      logErrorReported = true;
+      console.error(
+        `[ClawRouter] Usage logging failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 }

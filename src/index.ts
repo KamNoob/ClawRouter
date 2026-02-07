@@ -291,8 +291,10 @@ const plugin: OpenClawPluginDefinition = {
     // The loader ignores async returns, but the proxy starts in the background
     // and setActiveProxy() makes it available to the provider once ready.
     startProxyInBackground(api).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      api.logger.error(`Failed to start BlockRun proxy: ${msg}`);
       api.logger.error(
-        `Failed to start BlockRun proxy: ${err instanceof Error ? err.message : String(err)}`,
+        "ClawRouter requests will fail until the proxy starts. Check port 8402 availability.",
       );
     });
   },

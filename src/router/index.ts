@@ -15,6 +15,12 @@ export type RouterOptions = {
   modelPricing: Map<string, ModelPricing>;
 };
 
+/** CJK character range for token estimation (Chinese, Japanese kanji, Korean) */
+const CJK_PATTERN = /[\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF]/;
+
+/** Tier rank for structured output minimum tier comparison */
+const TIER_RANK: Record<Tier, number> = { SIMPLE: 0, MEDIUM: 1, COMPLEX: 2, REASONING: 3 };
+
 /**
  * Route a request to the cheapest capable model.
  *
@@ -32,9 +38,10 @@ export function route(
 ): RoutingDecision {
   const { config, modelPricing } = options;
 
-  // Estimate input tokens (~4 chars per token)
+  // Estimate input tokens — CJK text uses ~1-2 chars per token vs ~4 for Latin
   const fullText = `${systemPrompt ?? ""} ${prompt}`;
-  const estimatedTokens = Math.ceil(fullText.length / 4);
+  const charsPerToken = CJK_PATTERN.test(fullText) ? 2 : 4;
+  const estimatedTokens = Math.ceil(fullText.length / charsPerToken);
 
   // --- Override: large context → force COMPLEX ---
   if (estimatedTokens > config.overrides.maxTokensForceComplex) {
@@ -73,9 +80,8 @@ export function route(
 
   // Apply structured output minimum tier
   if (hasStructuredOutput) {
-    const tierRank: Record<Tier, number> = { SIMPLE: 0, MEDIUM: 1, COMPLEX: 2, REASONING: 3 };
     const minTier = config.overrides.structuredOutputMinTier;
-    if (tierRank[tier] < tierRank[minTier]) {
+    if (TIER_RANK[tier] < TIER_RANK[minTier]) {
       reasoning += ` | upgraded to ${minTier} (structured output)`;
       tier = minTier;
     }

@@ -58,12 +58,12 @@ src/
 
 ### Four-tier classification
 
-| Tier | Primary Model | Use Case |
-|------|--------------|----------|
-| SIMPLE | Gemini 2.5 Flash | Definitions, translations, factual lookups |
-| MEDIUM | DeepSeek Chat | General Q&A, summaries, moderate code |
-| COMPLEX | Claude Opus 4 | Large refactors, nuanced analysis |
-| REASONING | DeepSeek Reasoner | Proofs, multi-step math, formal logic |
+| Tier      | Primary Model     | Use Case                                   |
+| --------- | ----------------- | ------------------------------------------ |
+| SIMPLE    | Gemini 2.5 Flash  | Definitions, translations, factual lookups |
+| MEDIUM    | DeepSeek Chat     | General Q&A, summaries, moderate code      |
+| COMPLEX   | Claude Opus 4     | Large refactors, nuanced analysis          |
+| REASONING | DeepSeek Reasoner | Proofs, multi-step math, formal logic      |
 
 ## Code Conventions
 
@@ -108,14 +108,14 @@ src/
 
 ## Dependencies
 
-| Package | Purpose |
-|---------|---------|
-| `viem` | Ethereum wallet operations — private key to account, EIP-712 signing |
-| `openclaw` | Peer dependency — plugin system, provider registration |
-| `tsup` | Build tool (ESM bundling, dts generation) |
-| `typescript` | TypeScript 5.7 compiler |
-| `eslint` + `typescript-eslint` | Linting |
-| `prettier` | Code formatting |
+| Package                        | Purpose                                                              |
+| ------------------------------ | -------------------------------------------------------------------- |
+| `viem`                         | Ethereum wallet operations — private key to account, EIP-712 signing |
+| `openclaw`                     | Peer dependency — plugin system, provider registration               |
+| `tsup`                         | Build tool (ESM bundling, dts generation)                            |
+| `typescript`                   | TypeScript 5.7 compiler                                              |
+| `eslint` + `typescript-eslint` | Linting                                                              |
+| `prettier`                     | Code formatting                                                      |
 
 ## Common Tasks
 

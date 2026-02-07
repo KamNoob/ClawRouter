@@ -31,6 +31,7 @@ import type { ProviderAuthMethod, ProviderAuthContext, ProviderAuthResult } from
 
 const WALLET_DIR = join(homedir(), ".openclaw", "blockrun");
 const WALLET_FILE = join(WALLET_DIR, "wallet.key");
+const HEX_KEY_PATTERN = /^0x[0-9a-fA-F]{64}$/;
 
 /**
  * Try to load a previously auto-generated wallet key from disk.
@@ -38,7 +39,7 @@ const WALLET_FILE = join(WALLET_DIR, "wallet.key");
 async function loadSavedWallet(): Promise<string | undefined> {
   try {
     const key = (await readFile(WALLET_FILE, "utf-8")).trim();
-    if (key.startsWith("0x") && key.length === 66) return key;
+    if (HEX_KEY_PATTERN.test(key)) return key;
   } catch {
     // File doesn't exist yet
   }
@@ -74,7 +75,7 @@ export async function resolveOrGenerateWalletKey(): Promise<{
 
   // 2. Environment variable
   const envKey = process.env.BLOCKRUN_WALLET_KEY;
-  if (typeof envKey === "string" && envKey.startsWith("0x") && envKey.length === 66) {
+  if (typeof envKey === "string" && HEX_KEY_PATTERN.test(envKey)) {
     const account = privateKeyToAccount(envKey as `0x${string}`);
     return { key: envKey, address: account.address, source: "env" };
   }

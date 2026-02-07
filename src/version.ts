@@ -11,8 +11,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // In dist/, go up one level to find package.json
-const require = createRequire(import.meta.url);
-const pkg = require(join(__dirname, "..", "package.json")) as { version: string };
+let version = "0.0.0";
+try {
+  const require = createRequire(import.meta.url);
+  const pkg = require(join(__dirname, "..", "package.json")) as { version: string };
+  version = pkg.version;
+} catch {
+  // Fallback if package.json is not found (e.g., bundled without it)
+}
 
-export const VERSION = pkg.version;
+export const VERSION = version;
 export const USER_AGENT = `clawrouter/${VERSION}`;

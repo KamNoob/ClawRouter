@@ -17,6 +17,7 @@ export type CachedPaymentParams = {
 };
 
 const DEFAULT_TTL_MS = 3_600_000; // 1 hour
+const MAX_CACHE_ENTRIES = 1_000;
 
 export class PaymentCache {
   private cache = new Map<string, CachedPaymentParams>();
@@ -39,11 +40,25 @@ export class PaymentCache {
 
   /** Cache payment params from a 402 response. */
   set(endpointPath: string, params: Omit<CachedPaymentParams, "cachedAt">): void {
+    // Prune expired entries if cache grows too large
+    if (this.cache.size >= MAX_CACHE_ENTRIES) {
+      this.prune();
+    }
     this.cache.set(endpointPath, { ...params, cachedAt: Date.now() });
   }
 
   /** Invalidate cache for an endpoint (e.g., if payTo changed). */
   invalidate(endpointPath: string): void {
     this.cache.delete(endpointPath);
+  }
+
+  /** Prune expired entries. */
+  private prune(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.cache) {
+      if (now - entry.cachedAt > this.ttlMs) {
+        this.cache.delete(key);
+      }
+    }
   }
 }
