@@ -19,7 +19,14 @@ npm run format:check   # Check formatting without writing
 
 **CI runs (in order):** format check → lint → typecheck → build. All four must pass.
 
-There is no test script in package.json. Tests are standalone TypeScript files run directly (e.g., `npx tsx test/e2e.ts`). Some tests require a funded `BLOCKRUN_WALLET_KEY` environment variable.
+There is no test script in package.json. Tests are standalone TypeScript files run directly:
+
+```bash
+npx tsx test/e2e.ts        # Router classification + full routing (no wallet needed)
+npx tsx test-balance.ts    # Balance monitoring, error classes, formatting
+npx tsx test-retry.ts      # Retry logic, exponential backoff, isRetryable
+npx tsx test-e2e.ts        # Live proxy + x402 payment (requires funded BLOCKRUN_WALLET_KEY)
+```
 
 ## Architecture
 
@@ -92,7 +99,9 @@ src/
 - **Type-safe discriminated unions** for tiers: `"SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING"`
 - **Graceful degradation** — errors in logging/monitoring never break the request pipeline
 - **Singleton state** — `activeProxy` global tracks proxy lifecycle
-- **Cache patterns** — `RequestDeduplicator` (30s TTL), `PaymentCache`, balance cache (30s TTL)
+- **Cache patterns** — `RequestDeduplicator` (30s TTL, 1MB body limit), `PaymentCache` (1h TTL, 1000 entry max), balance cache (30s TTL)
+- **Header allowlist** — proxy forwards only `content-type`, `accept`, `accept-encoding`, `accept-language` to upstream
+- **CJK-aware token estimation** — uses 2 chars/token for CJK text, 4 chars/token for Latin
 
 ### Wallet key resolution order
 
@@ -125,14 +134,24 @@ Edit `src/models.ts` — add an entry to the `BLOCKRUN_MODELS` array following t
 
 ### Modifying routing behavior
 
-- **Keywords/signals**: Edit `src/router/config.ts` (multilingual keyword lists)
-- **Scoring weights**: Edit `dimensionWeights` in `src/router/config.ts`
+- **Keywords/signals**: Edit `src/router/config.ts` (multilingual keyword lists). All keywords must be **lowercase** — the classifier lowercases input text but does not lowercase keywords at runtime for performance.
+- **Scoring weights**: Edit `dimensionWeights` in `src/router/config.ts`. Every dimension in `rules.ts` **must** have a corresponding weight or the classifier throws at runtime.
 - **Tier boundaries**: Edit `tierBoundaries` in `src/router/config.ts`
 - **Scoring logic**: Edit `src/router/rules.ts` (the 14-dimension classifier)
 
 ### Adding a new error type
 
 Follow the pattern in `src/errors.ts`: create a class extending `Error` with a `readonly code` discriminant and a companion `isFooError()` type guard.
+
+## Security Constraints
+
+- **Request body limit**: 10MB max (`MAX_REQUEST_BODY_SIZE` in `proxy.ts`) — returns 413 for oversized payloads
+- **Response cache limit**: 10MB max per response (`MAX_DEDUP_CACHE_SIZE` in `proxy.ts`) — skips caching for large responses
+- **Header allowlist**: Proxy only forwards `content-type`, `accept`, `accept-encoding`, `accept-language` to upstream — do not add headers without security review
+- **Wallet key validation**: Must match `/^0x[0-9a-fA-F]{64}$/` (`HEX_KEY_PATTERN` in `auth.ts`) — length-only checks are insufficient
+- **Wallet directory permissions**: `0o700` on `~/.openclaw/blockrun/`, `0o600` on `wallet.key`
+- **Token estimation clamped**: `maxTokens` capped at 1M to avoid `Number` precision loss
+- **LLM classifier cache**: Uses SHA-256 hashing (not weak 32-bit) to prevent collision-based cache poisoning
 
 ## Things to Avoid
 

@@ -517,7 +517,12 @@ npm install
 npm run build
 npm run typecheck
 
-# End-to-end tests (requires funded wallet)
+# Tests that run without a wallet
+npx tsx test/e2e.ts        # Router classification + full routing
+npx tsx test-balance.ts    # Balance monitoring, error classes, formatting
+npx tsx test-retry.ts      # Retry logic, exponential backoff
+
+# End-to-end proxy tests (requires funded wallet)
 BLOCKRUN_WALLET_KEY=0x... npx tsx test-e2e.ts
 ```
 
