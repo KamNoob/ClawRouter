@@ -155,8 +155,9 @@ export class BalanceMonitor {
     // Use BigInt arithmetic to avoid Number precision loss for large balances
     const whole = amountMicros / 1_000_000n;
     const frac = amountMicros % 1_000_000n;
-    // Pad fractional part to 2 decimal places (cents)
-    const cents = (frac / 10_000n).toString().padStart(2, "0");
+    // Round fractional part to 2 decimal places (cents)
+    // Add 5000 before dividing by 10000 to get banker's rounding
+    const cents = ((frac + 5_000n) / 10_000n).toString().padStart(2, "0");
     return `$${whole}.${cents}`;
   }
 
