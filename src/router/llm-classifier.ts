@@ -9,6 +9,7 @@
  * Only triggered for ~20-30% of requests.
  */
 
+import { createHash } from "node:crypto";
 import type { Tier } from "./types.js";
 
 const CLASSIFIER_PROMPT = `You are a query complexity classifier. Classify the user's query into exactly one category.
@@ -107,13 +108,7 @@ function parseTier(text: string): Tier {
 }
 
 function simpleHash(str: string): string {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = (hash << 5) - hash + char;
-    hash |= 0;
-  }
-  return hash.toString(36);
+  return createHash("sha256").update(str).digest("hex").slice(0, 16);
 }
 
 function pruneCache(): void {

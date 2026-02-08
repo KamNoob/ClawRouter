@@ -48,6 +48,8 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 180_000; // 3 minutes (allows for on-chain tx
 const DEFAULT_PORT = 8402;
 /** Maximum response size to cache for dedup (10MB) */
 const MAX_DEDUP_CACHE_SIZE = 10 * 1024 * 1024;
+/** Maximum request body size (10MB) — prevents memory exhaustion from oversized payloads */
+const MAX_REQUEST_BODY_SIZE = 10 * 1024 * 1024;
 
 /** Callback info for low balance warning */
 export type LowBalanceInfo = {
@@ -129,7 +131,8 @@ function estimateAmount(
 
   // Rough estimate: ~4 chars per token for input
   const estimatedInputTokens = Math.ceil(bodyLength / 4);
-  const estimatedOutputTokens = maxTokens || model.maxOutput || 4096;
+  // Clamp to 1M tokens to avoid precision loss with large Number values
+  const estimatedOutputTokens = Math.min(maxTokens || model.maxOutput || 4096, 1_000_000);
 
   const costUsd =
     (estimatedInputTokens / 1_000_000) * model.inputPrice +
@@ -289,10 +292,22 @@ async function proxyRequest(
   // Build upstream URL: /v1/chat/completions → https://blockrun.ai/api/v1/chat/completions
   const upstreamUrl = `${apiBase}${req.url}`;
 
-  // Collect request body
+  // Collect request body (with size limit to prevent memory exhaustion)
   const bodyChunks: Buffer[] = [];
+  let bodySize = 0;
   for await (const chunk of req) {
-    bodyChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bodySize += buf.length;
+    if (bodySize > MAX_REQUEST_BODY_SIZE) {
+      res.writeHead(413, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: { message: "Request body too large", type: "invalid_request_error" },
+        }),
+      );
+      return;
+    }
+    bodyChunks.push(buf);
   }
   let body = Buffer.concat(bodyChunks);
 
@@ -477,17 +492,11 @@ async function proxyRequest(
     }, HEARTBEAT_INTERVAL_MS);
   }
 
-  // Forward headers, stripping host, connection, and content-length
+  // Forward only safe headers (allowlist) to prevent header injection to upstream
+  const SAFE_HEADERS = new Set(["content-type", "accept", "accept-encoding", "accept-language"]);
   const headers: Record<string, string> = {};
   for (const [key, value] of Object.entries(req.headers)) {
-    if (
-      key === "host" ||
-      key === "connection" ||
-      key === "transfer-encoding" ||
-      key === "content-length"
-    )
-      continue;
-    if (typeof value === "string") {
+    if (SAFE_HEADERS.has(key) && typeof value === "string") {
       headers[key] = value;
     }
   }

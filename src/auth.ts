@@ -52,7 +52,7 @@ async function loadSavedWallet(): Promise<string | undefined> {
 async function generateAndSaveWallet(): Promise<{ key: string; address: string }> {
   const key = generatePrivateKey();
   const account = privateKeyToAccount(key);
-  await mkdir(WALLET_DIR, { recursive: true });
+  await mkdir(WALLET_DIR, { recursive: true, mode: 0o700 });
   await writeFile(WALLET_FILE, key + "\n", { mode: 0o600 });
   return { key, address: account.address };
 }
